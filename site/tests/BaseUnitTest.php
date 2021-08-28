@@ -9,6 +9,7 @@ use app\libraries\Utils;
 use app\libraries\Access;
 use app\models\Config;
 use app\models\User;
+use Doctrine\ORM\EntityManager;
 use ReflectionException;
 
 class BaseUnitTest extends \PHPUnit\Framework\TestCase {
@@ -39,8 +40,10 @@ class BaseUnitTest extends \PHPUnit\Framework\TestCase {
      * @return Core
      */
     protected function createMockCore($config_values = [], $user_config = [], $queries = [], $access = []) {
+        /** @var Core&\PHPUnit\Framework\MockObject\MockObject $core */
         $core = $this->createMock(Core::class);
 
+        /** @var Config&\PHPUnit\Framework\MockObject\MockObject $config */
         $config = $this->createMockModel(Config::class);
         if (isset($config_values['semester'])) {
             $config->method('getSemester')->willReturn($config_values['semester']);
@@ -109,6 +112,12 @@ class BaseUnitTest extends \PHPUnit\Framework\TestCase {
         }
         $core->method('getQueries')->willReturn($mock_queries);
 
+        $course_entity_manger = $this->createMock(EntityManager::class);
+        $core->method('getCourseEntityManager')->willReturn($course_entity_manger);
+
+        $submitty_entity_manager = $this->createMock(EntityManager::class);
+        $core->method('getSubmittyEntityManager')->willReturn($submitty_entity_manager);
+
         if (!isset($user_config['no_user'])) {
             /** @noinspection PhpUnhandledExceptionInspection */
             $user = $this->createMockModel(User::class);
@@ -142,7 +151,7 @@ class BaseUnitTest extends \PHPUnit\Framework\TestCase {
             $core->method('getUser')->willReturn($user);
         }
 
-        /** @noinspection PhpParamsInspection */
+        /** @var Output&\PHPUnit\Framework\MockObject\MockObject $output */
         $output = $this->getMockBuilder(Output::class)
             ->setConstructorArgs([$core])
             ->setMethods(['addBreadcrumb'])
@@ -152,7 +161,6 @@ class BaseUnitTest extends \PHPUnit\Framework\TestCase {
 
         $core->method('getOutput')->willReturn($output);
 
-        /** @noinspection PhpIncompatibleReturnTypeInspection */
         return $core;
     }
 

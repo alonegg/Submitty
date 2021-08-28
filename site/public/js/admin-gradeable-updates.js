@@ -1,6 +1,8 @@
 
 let updateInProgressCount = 0;
 let errors = {};
+var previous_gradeable = "";
+var gradeable = "";
 function updateErrorMessage() {
     if (Object.keys(errors).length !== 0) {
         $('#save_status').html('<span style="color: red">Some Changes Failed!</span>');
@@ -15,7 +17,7 @@ function updateErrorMessage() {
 function setError(name, err) {
     $('[name="' + name + '"]').each(function (i, elem) {
         elem.title = err;
-        elem.style.backgroundColor = '#FDD';
+        elem.setCustomValidity("Invalid field.");
     });
     errors[name] = err;
 }
@@ -23,7 +25,7 @@ function setError(name, err) {
 function clearError(name, update) {
     $('[name="' + name + '"]').each(function (i, elem) {
         elem.title = '';
-        elem.style.backgroundColor = '';
+        elem.setCustomValidity('');
 
         // Update the value if provided
         if(update !== undefined) {
@@ -108,6 +110,33 @@ $(document).ready(function () {
         if ($(this).hasClass('ignore')) {
             return;
         }
+        if (previous_gradeable === '') {
+            previous_gradeable = $('#gradeable-lock').val();
+        }
+        gradeable = $('#gradeable-lock').val();
+        if (previous_gradeable !== gradeable) {
+            $('#gradeable-lock-points').val(0);
+        }
+        if (gradeable !== '') {
+            $('#gradeable-lock-max-points-field').show();
+            $('#gradeable-lock-max-points').text(`Out of ${gradeable_max_autograder_points[gradeable]} Maximum Autograding Points`);
+            previous_gradeable = gradeable;
+        }
+        else {
+            $('#gradeable-lock-points').val(0);
+            $('#gradeable-lock-max-points-field').hide();
+        }
+
+        let points = $('#gradeable-lock-points').val();
+        if (points === '') {
+            return false;
+        }
+        points = parseInt(points);
+        if ((points < 0 || points > gradeable_max_autograder_points[gradeable])) {
+            displayErrorMessage("Points must be between 0 and the max autograder points for that gradeable.");
+            return;
+        }
+
         // If its rubric-related, then make different request
         if ($('#gradeable_rubric').find('[name="' + this.name + '"]').length > 0) {
             // ... but don't automatically save electronic rubric data
@@ -146,9 +175,9 @@ $(document).ready(function () {
         };
 
         // If its date-related, then submit all date data
-        if ($('#gradeable-dates').find('input[name="' + this.name + '"]').length > 0
+        if ($('#gradeable-dates').find('input[name="' + this.name + '"]:enabled').length > 0
             || $(this).hasClass('date-related')) {
-            $('#gradeable-dates :input,.date-related').each(addDataToRequest);
+            $('#gradeable-dates :input:enabled,.date-related').each(addDataToRequest);
         }
         ajaxUpdateGradeableProperty($('#g_id').val(), data,
             function (response_data) {
@@ -203,7 +232,7 @@ $(document).ready(function () {
                         $(val).val('0');
                     }
                     data[val.name] = $(val).val();
-                   
+
             };
             setRandomGraders($('#g_id').val(), data, function (response_data) {
                 // Clear errors by setting new values
@@ -212,7 +241,7 @@ $(document).ready(function () {
                         clearError(key, response_data[key]);
                     }
                 }
-                // Clear errors by just removing red background
+                // Clear errors by setting custom validity to ''
                 for (let key in data) {
                     if (data.hasOwnProperty(key)) {
                         clearError(key);
@@ -223,10 +252,10 @@ $(document).ready(function () {
         }
         else {
             return false;
-        }  
+        }
         });
     });
-    
+
 function ajaxRebuildGradeableButton() {
     var gradeable_id = $('#g_id').val();
     $.ajax({
@@ -327,13 +356,15 @@ function setRandomGraders(gradeable_id,p_values,successCallback,errorCallback,al
     else {
         number_to_grade=$('#number_to_peer_grade').val();
     }
+
     if(number_to_grade<=0) {
-        if (confirm("This will clear Peer Matrix. Continue?")) {
+        number_to_grade = 0;
+        if (confirm("This will clear Peer Matrix. Continue?") == false) {
+          $('#peer_loader').addClass("hide");
+          return false;
         }
-    else {
-      $('#peer_loader').addClass("hide");
-      return false;} 
     }
+
     var gradeable_id=$('#g_id').val();
     let restrict_to_registration="unchecked";
     let submit_before_grading="unchecked";
@@ -344,9 +375,9 @@ function setRandomGraders(gradeable_id,p_values,successCallback,errorCallback,al
     if($('#submit-before-grading').is(':checked')){
         submit_before_grading="checked";
     }
-        
+
     $.ajax({
-        type: "POST", 
+        type: "POST",
         url: buildCourseUrl(['gradeable', gradeable_id, 'RandomizePeers']),
         data: {
             csrf_token:p_values['csrf_token'],
@@ -366,13 +397,13 @@ function setRandomGraders(gradeable_id,p_values,successCallback,errorCallback,al
             $('#peer_loader').addClass("hide");
             location.reload();
             },
-        
+
       /* To check for Server Error Messages */
         error: function (jqXHR, exception) {
             let msg = '';
             if (jqXHR.status === 0) {
                 msg = 'Not connect.\n Verify Network.';
-            } 
+            }
             else if (jqXHR.status == 404) {
                 msg = 'Requested page not found. [404]';
             } else if (jqXHR.status == 500) {
@@ -393,7 +424,7 @@ function setRandomGraders(gradeable_id,p_values,successCallback,errorCallback,al
 function ajaxUpdateGradeableProperty(gradeable_id, p_values, successCallback, errorCallback) {
     if('peer_graders_list' in p_values && $('#peer_graders_list').length){
         $('#save_status').html('Saving Changes');
-        var csvFile = $('#peer_graders_list').prop('files')[0];  
+        var csvFile = $('#peer_graders_list').prop('files')[0];
         let reader = new FileReader();
         reader.readAsText(csvFile);
         jsonFile = [];
@@ -403,7 +434,7 @@ function ajaxUpdateGradeableProperty(gradeable_id, p_values, successCallback, er
                 var headers = lines[0].split(",");
                 var students_lines_index = -1;
                 var graders_lines_index = -1;
-                
+
                 for(var k=0;k<headers.length;k++){
                     if(headers[k].toLowerCase().trim() == "student"){
                         students_lines_index = k;
@@ -412,12 +443,12 @@ function ajaxUpdateGradeableProperty(gradeable_id, p_values, successCallback, er
                         graders_lines_index = k;
                     }
                 }
-                
+
                 if(students_lines_index == -1){
                     alert("Cannot Proccess file, requires exactly one labelled 'student' column");
                     return;
                 }
-                
+
                 if(graders_lines_index == -1){
                     alert("Cannot Proccess file, requires exactly one labelled 'grader' column");
                     return;
@@ -479,14 +510,14 @@ function ajaxUpdateGradeableProperty(gradeable_id, p_values, successCallback, er
                         setGradeableUpdateComplete();
                         console.error('Failed to parse response from server: ' + response);
                     }
-                });            
+                });
             }
             catch{
-                $('#save_status').html('Error Saving Changes');    
+                $('#save_status').html('Error Saving Changes');
             }
         }
     }
-        
+
     else{
         let container = $('#container-rubric');
         if (container.length === 0) {

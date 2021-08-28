@@ -237,7 +237,7 @@ class ReportController extends AbstractController {
                 $graded_gradeable = $user_graded_gradeables[$g->getId()];
             }
 
-            $graded_gradeable->setOverriddenGrades($this->all_overrides[$graded_gradeable->getSubmitter()->getId()][$graded_gradeable->getGradeableId()] ?? null);
+            $graded_gradeable->setOverriddenGrades($this->all_overrides[$user->getId()][$graded_gradeable->getGradeableId()] ?? null);
             $ggs[] = $graded_gradeable;
         }
         return $ggs;
@@ -411,7 +411,7 @@ class ReportController extends AbstractController {
             'id' => $g->getId(),
             'name' => $g->getTitle(),
             'gradeable_type' => GradeableType::typeToString($g->getType()),
-            'grade_released_date' => $g->getGradeReleasedDate()->format('Y-m-d H:i:s O'),
+            'grade_released_date' => $g->hasReleaseDate() ? $g->getGradeReleasedDate()->format('Y-m-d H:i:s O') : $g->getSubmissionOpenDate()->format('Y-m-d H:i:s O'),
         ];
 
         // Add team members to output
