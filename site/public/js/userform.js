@@ -27,6 +27,8 @@ $("#edit-user-form").ready(function() {
 function newStudentForm() {
     $('[name="user_group"] option[value="4"]').prop('selected', true);
     $('#user-form-assigned-sections').hide();
+    $('[name="registration_type"]').show();
+    $('label[for="registration_type"]').show();
     $('#user-form-student-error-message').show();
     $("#new-student-modal-title").css('display','block');
     $("#new-grader-modal-title").css('display','none');
@@ -38,6 +40,8 @@ function newGraderForm() {
     $('[name="user_group"] option[value="3"]').prop('selected', true);
     $('#user-form-student-error-message').hide();
     $('#user-form-assigned-sections').show();
+    $('[name="registration_type"]').hide();
+    $('label[for="registration_type"]').hide();
     $("#new-student-modal-title").css('display','none');
     $("#new-grader-modal-title").css('display','block');
     newUserForm();
@@ -69,7 +73,11 @@ function newUserForm() {
     captureTabInModal("edit-user-form");
 }
 
-//opens modal with initial settings for edit user
+/**
+ * Opens modal with initial settings for edit user form.
+ * 
+ * @param {string} user_id
+ */
 function editUserForm(user_id) {
     var url = buildCourseUrl(['users', 'details']) + `?user_id=${user_id}`;
     $.ajax({
@@ -134,9 +142,13 @@ function userFormChange() {
     }
     if(is_student) {
         $("#user-form-assigned-sections").hide();
+        $('[name="registration_type"]').show();
+        $('label[for="registration_type"]').show();
     }
     else {
         $("#user-form-assigned-sections").show();
+        $('[name="registration_type"]').hide();
+        $('label[for="registration_type"]').hide();
     }
 }
 
@@ -146,41 +158,42 @@ function checkValidEntries() {
     switch(input.prop("id")) {
         case "user_id":
             if (input.val() == "") {
-                input[0].setCustomValidity(input.prop('id')+" is required");
+                input[0].setCustomValidity(input.prop('id') + " is required");
                 break;
             }
             if (!$('#user-form-already-exists-error-message').is(':hidden')) {
-                input[0].setCustomValidity(input.prop('id')+" already exists");
+                input[0].setCustomValidity(input.prop('id') + " already exists");
                 break;
             }
             var valid_expression = /^[a-z0-9_\-]*$/;
-            setRedOrTransparent(input,valid_expression);
+            setRedOrTransparent(input, valid_expression);
             break;
         case "user_numeric_id":
             break;
         case "user_firstname":
         case "user_lastname":
             if (input.val() == "") {
-                input[0].setCustomValidity(input.prop('id')+" is required");
+                input[0].setCustomValidity(input.prop('id') + " is required");
                 break;
             }
             var valid_expression = /^[a-zA-Z'`\-\.\(\) ]*$/;
-            setRedOrTransparent(input,valid_expression);
+            setRedOrTransparent(input, valid_expression);
             break;
         case "user_preferred_firstname":
         case "user_preferred_lastname":
             var valid_expression = /^[a-zA-Z'`\-\.\(\) ]{0,30}$/;
-            setRedOrTransparent(input,valid_expression);
+            setRedOrTransparent(input, valid_expression);
             break;
         case "user_email":
+        case "user_email_secondary":
             if (input.val() == '') {
                 input.css("background-color", "transparent");
                 break;
             }
             var valid_expression = /^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,253}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,253}[a-zA-Z0-9])?)*$/;
-            setRedOrTransparent(input,valid_expression);
+            setRedOrTransparent(input, valid_expression);
             break;
-        }
+    }
 
     //disable submit button if anything is invalid
     var has_invalid_entry = false;
@@ -219,6 +232,11 @@ function autoCompleteOnUserId(user_information) {
     }
 }
 
+/**
+ * Fill in the given user's information on the edit user modal initial display.
+ * 
+ * @param {array} user
+ */
 function completeUserFormInformation(user) {
     var form = $("#edit-user-form");
 
@@ -232,6 +250,7 @@ function completeUserFormInformation(user) {
     $('[name="user_preferred_lastname"]', form).val(user['user_preferred_lastname']);
     $('[name="user_preferred_lastname"]').change();
     $('[name="user_email"]', form).val(user['user_email']);
+    $('[name="user_email_secondary"]', form).val(user['user_email_secondary']);
     $('[name="user_email"]').change();
     $('[name="registration_subsection"]', form).val(user['registration_subsection']);
     $('[name="registration_subsection"]').change();
@@ -270,9 +289,14 @@ function completeUserFormInformation(user) {
     }
     if ($('[name="user_group"] option[value="4"]', form).prop('selected')) {
         $('#user-form-assigned-sections').hide();
+        $('[name="registration_type"]').show();
+        $('label[for="registration_type"]').show();
+        $('[name="registration_type"] option[value="' + (user['registration_type'] ?? 'graded') + '"]', form).prop('selected', true);
     }
     else {
         $('#user-form-assigned-sections').show();
+        $('[name="registration_type"]').hide();
+        $('label[for="registration_type"]').hide();
     }
 }
 

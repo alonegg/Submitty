@@ -14,20 +14,6 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -
---
-
-CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
-
-
---
--- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
-
-
---
 -- Name: dblink; Type: EXTENSION; Schema: -; Owner: -
 --
 
@@ -247,45 +233,44 @@ $$;
 CREATE FUNCTION public.sync_user() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-DECLARE
-    course_row RECORD;
-    db_conn VARCHAR;
-    query_string TEXT;
-    preferred_name_change_details TEXT;
-BEGIN
-    -- Check for changes in users.user_preferred_firstname and users.user_preferred_lastname.
-    IF coalesce(OLD.user_preferred_firstname, '') <> coalesce(NEW.user_preferred_firstname, '') THEN
-        preferred_name_change_details := format('PREFERRED_FIRSTNAME OLD: "%s" NEW: "%s" ', OLD.user_preferred_firstname, NEW.user_preferred_firstname);
-    END IF;
-    IF coalesce(OLD.user_preferred_lastname, '') <> coalesce(NEW.user_preferred_lastname, '') THEN
-        preferred_name_change_details := format('%sPREFERRED_LASTNAME OLD: "%s" NEW: "%s"', preferred_name_change_details, OLD.user_preferred_lastname, NEW.user_preferred_lastname);
-    END IF;
-    -- If any preferred_name data has changed, preferred_name_change_details will not be NULL.
-    IF preferred_name_change_details IS NOT NULL THEN
-        preferred_name_change_details := format('USER_ID: "%s" %s', NEW.user_id, preferred_name_change_details);
-        RAISE LOG USING MESSAGE = 'PREFERRED_NAME DATA UPDATE', DETAIL = preferred_name_change_details;
-    END IF;
-    -- Propagate UPDATE to course DBs
-    FOR course_row IN SELECT semester, course FROM courses_users WHERE user_id=NEW.user_id LOOP
-        RAISE NOTICE 'Semester: %, Course: %', course_row.semester, course_row.course;
-        db_conn := format('dbname=submitty_%s_%s', course_row.semester, course_row.course);
-        query_string := 'UPDATE users SET user_numeric_id=' || quote_nullable(NEW.user_numeric_id) || ', user_firstname=' || quote_literal(NEW.user_firstname) || ', user_preferred_firstname=' || quote_nullable(NEW.user_preferred_firstname) || ', user_lastname=' || quote_literal(NEW.user_lastname) || ', user_preferred_lastname=' || quote_nullable(NEW.user_preferred_lastname) || ', user_email=' || quote_literal(NEW.user_email) || ', time_zone=' || quote_literal(NEW.time_zone) || ', display_image_state=' || quote_literal(NEW.display_image_state) || ', user_updated=' || quote_literal(NEW.user_updated) || ', instructor_updated=' || quote_literal(NEW.instructor_updated) || ' WHERE user_id=' || quote_literal(NEW.user_id);
-        -- Need to make sure that query_string was set properly as dblink_exec will happily take a null and then do nothing
-        IF query_string IS NULL THEN
-            RAISE EXCEPTION 'query_string error in trigger function sync_user()';
+    DECLARE
+        course_row RECORD;
+        db_conn VARCHAR;
+        query_string TEXT;
+        preferred_name_change_details TEXT;
+    BEGIN
+        -- Check for changes in users.user_preferred_firstname and users.user_preferred_lastname.
+        IF coalesce(OLD.user_preferred_firstname, '') <> coalesce(NEW.user_preferred_firstname, '') THEN
+            preferred_name_change_details := format('PREFERRED_FIRSTNAME OLD: "%s" NEW: "%s" ', OLD.user_preferred_firstname, NEW.user_preferred_firstname);
         END IF;
-        PERFORM dblink_exec(db_conn, query_string);
-    END LOOP;
+        IF coalesce(OLD.user_preferred_lastname, '') <> coalesce(NEW.user_preferred_lastname, '') THEN
+            preferred_name_change_details := format('%sPREFERRED_LASTNAME OLD: "%s" NEW: "%s"', preferred_name_change_details, OLD.user_preferred_lastname, NEW.user_preferred_lastname);
+        END IF;
+        -- If any preferred_name data has changed, preferred_name_change_details will not be NULL.
+        IF preferred_name_change_details IS NOT NULL THEN
+            preferred_name_change_details := format('USER_ID: "%s" %s', NEW.user_id, preferred_name_change_details);
+            RAISE LOG USING MESSAGE = 'PREFERRED_NAME DATA UPDATE', DETAIL = preferred_name_change_details;
+        END IF;
+        -- Propagate UPDATE to course DBs
+        FOR course_row IN SELECT semester, course FROM courses_users WHERE user_id=NEW.user_id LOOP
+            RAISE NOTICE 'Semester: %, Course: %', course_row.semester, course_row.course;
+            db_conn := format('dbname=submitty_%s_%s', course_row.semester, course_row.course);
+            query_string := 'UPDATE users SET user_numeric_id=' || quote_nullable(NEW.user_numeric_id) || ', user_firstname=' || quote_literal(NEW.user_firstname) || ', user_preferred_firstname=' || quote_nullable(NEW.user_preferred_firstname) || ', user_lastname=' || quote_literal(NEW.user_lastname) || ', user_preferred_lastname=' || quote_nullable(NEW.user_preferred_lastname) || ', user_email=' || quote_literal(NEW.user_email) || ', user_email_secondary=' || quote_literal(NEW.user_email_secondary) || ',user_email_secondary_notify=' || quote_literal(NEW.user_email_secondary_notify) || ', time_zone=' || quote_literal(NEW.time_zone)  || ', display_image_state=' || quote_literal(NEW.display_image_state)  || ', user_updated=' || quote_literal(NEW.user_updated) || ', instructor_updated=' || quote_literal(NEW.instructor_updated) || ' WHERE user_id=' || quote_literal(NEW.user_id);
+            -- Need to make sure that query_string was set properly as dblink_exec will happily take a null and then do nothing
+            IF query_string IS NULL THEN
+                RAISE EXCEPTION 'query_string error in trigger function sync_user()';
+            END IF;
+            PERFORM dblink_exec(db_conn, query_string);
+        END LOOP;
 
-    -- All done.
-    RETURN NULL;
-END;
-$$;
+        -- All done.
+        RETURN NULL;
+    END;
+    $$;
 
 
 SET default_tablespace = '';
 
-SET default_with_oids = false;
 
 --
 -- Name: courses; Type: TABLE; Schema: public; Owner: -
@@ -294,7 +279,11 @@ SET default_with_oids = false;
 CREATE TABLE public.courses (
     semester character varying(255) NOT NULL,
     course character varying(255) NOT NULL,
-    status smallint DEFAULT 1 NOT NULL
+    status smallint DEFAULT 1 NOT NULL,
+    group_name character varying(255) NOT NULL,
+    owner_name character varying(255) NOT NULL,
+    CONSTRAINT group_validate CHECK (((group_name)::text ~ '^[a-zA-Z0-9_-]*$'::text)),
+    CONSTRAINT owner_validate CHECK (((owner_name)::text ~ '^[a-zA-Z0-9_-]*$'::text))
 );
 
 
@@ -329,13 +318,16 @@ CREATE TABLE public.courses_users (
 --
 
 CREATE TABLE public.emails (
-    id integer NOT NULL,
+    id bigint NOT NULL,
     user_id character varying NOT NULL,
     subject text NOT NULL,
     body text NOT NULL,
     created timestamp without time zone NOT NULL,
     sent timestamp without time zone,
-    error character varying DEFAULT ''::character varying NOT NULL
+    error character varying DEFAULT ''::character varying NOT NULL,
+    email_address character varying(255) DEFAULT ''::character varying NOT NULL,
+    semester character varying,
+    course character varying
 );
 
 
@@ -439,8 +431,43 @@ CREATE TABLE public.users (
     api_key character varying(255) DEFAULT encode(public.gen_random_bytes(16), 'hex'::text) NOT NULL,
     time_zone character varying DEFAULT 'NOT_SET/NOT_SET'::character varying NOT NULL,
     display_image_state character varying DEFAULT 'system'::character varying NOT NULL,
+    user_email_secondary character varying(255) DEFAULT ''::character varying NOT NULL,
+    user_email_secondary_notify boolean DEFAULT false,
     CONSTRAINT users_user_access_level_check CHECK (((user_access_level >= 1) AND (user_access_level <= 3)))
 );
+
+
+--
+-- Name: vcs_auth_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vcs_auth_tokens (
+    id integer NOT NULL,
+    user_id character varying NOT NULL,
+    token character varying NOT NULL,
+    name character varying NOT NULL,
+    expiration timestamp(0) with time zone
+);
+
+
+--
+-- Name: vcs_auth_tokens_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vcs_auth_tokens_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vcs_auth_tokens_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vcs_auth_tokens_id_seq OWNED BY public.vcs_auth_tokens.id;
 
 
 --
@@ -448,6 +475,13 @@ CREATE TABLE public.users (
 --
 
 ALTER TABLE ONLY public.emails ALTER COLUMN id SET DEFAULT nextval('public.emails_id_seq'::regclass);
+
+
+--
+-- Name: vcs_auth_tokens id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vcs_auth_tokens ALTER COLUMN id SET DEFAULT nextval('public.vcs_auth_tokens_id_seq'::regclass);
 
 
 --
@@ -536,6 +570,14 @@ ALTER TABLE ONLY public.users
 
 ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (user_id);
+
+
+--
+-- Name: vcs_auth_tokens vcs_auth_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vcs_auth_tokens
+    ADD CONSTRAINT vcs_auth_tokens_pkey PRIMARY KEY (id);
 
 
 --
@@ -641,6 +683,14 @@ ALTER TABLE ONLY public.mapped_courses
 
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id) ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: vcs_auth_tokens user_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vcs_auth_tokens
+    ADD CONSTRAINT user_fk FOREIGN KEY (user_id) REFERENCES public.users(user_id);
 
 
 --

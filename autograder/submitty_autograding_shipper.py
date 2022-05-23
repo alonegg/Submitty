@@ -30,6 +30,7 @@ from typing import List, Tuple
 
 from autograder import autograding_utils
 from autograder import packer_unpacker
+from autograder import scheduler
 from autograder import config as submitty_config
 
 
@@ -635,9 +636,19 @@ def grade_queue_file(config, my_name, which_machine, which_untrusted, queue_file
 
     # Try to short-circuit this job. If it's possible, then great! Clean
     # everything up and return.
-    if try_short_circuit(config, queue_file):
-        grading_cleanup(config, my_name, queue_file, grading_file)
-        return
+    try:
+        if try_short_circuit(config, queue_file):
+            grading_cleanup(config, my_name, queue_file, grading_file)
+            return
+    except Exception as e:
+        # Catch-all to help prevent the shipper from getting into a weird stuck state.
+        config.logger.log_message(
+            f"Unexpected error when attempting to short-circuit {queue_file}: {e}. "
+            f"Attempting to grade normally. See stack traces for more details."
+        )
+        config.logger.log_stack_trace(
+            traceback.format_exc()
+        )
 
     # TODO: break which_machine into id, address, and passphrase.
 
@@ -734,6 +745,27 @@ def valid_github_repo_id(repoid):
     if not repoid == filtered_repoid:
         return False
     return True
+
+
+def calculate_size_cleanup_symlinks(directory):
+    total_size = 0
+    included_symlinks = False
+    for root, subdirectories, files in os.walk(directory):
+        for subdirectory in subdirectories:
+            sd = os.path.join(root, subdirectory)
+            if (os.path.islink(sd)):
+                os.remove(sd)
+                included_symlinks = True
+        for file in files:
+            f = os.path.join(root, file)
+            if (not os.path.exists(f)):
+                os.remove(f)
+            elif (os.path.islink(f)):
+                os.remove(f)
+                included_symlinks = True
+            else:
+                total_size += os.stat(f).st_size
+    return (total_size, included_symlinks)
 
 
 def checkout_vcs_repo(config, my_file):
@@ -875,7 +907,8 @@ def checkout_vcs_repo(config, my_file):
             # determine which version we need to checkout
             # if the repo is empty or the specified branch does not exist, this command will fail
             try:
-                what_version = subprocess.check_output(['git', 'rev-list', '-n', '1', which_branch])
+                what_version = subprocess.check_output(['git', 'rev-list', '-n', '1',
+                                                        which_branch, '--'])
                 # old method:  when we had the full history, roll-back to a version by date
                 # what_version = subprocess.check_output(['git', 'rev-list', '-n', '1',
                 #                                         '--before="'+submission_string+'"',
@@ -951,6 +984,16 @@ def checkout_vcs_repo(config, my_file):
                 "credentials.\n",
                 file=f)
 
+    # remove the .git directory (storing full history and metafiles)
+    git_path = os.path.join(checkout_path, ".git")
+    shutil.rmtree(git_path, ignore_errors=True)
+
+    # calculate total file size, and remove symlinks
+    (checkout_size, checkout_included_symlinks) = calculate_size_cleanup_symlinks(checkout_path)
+
+    obj["checkout_total_size"] = checkout_size
+    obj["checkout_included_symlinks"] = checkout_included_symlinks
+
     return obj
 
 
@@ -996,7 +1039,7 @@ def get_job(config, my_name, which_machine, my_capabilities, which_untrusted):
     scheduler/shipper/worker and refactoring this design should be
     part of the project.
     ----------------------------------------------------------------
-    '''
+    '''  # noqa: B018
 
     # Grab all the VCS files currently in the folder...
     vcs_files = [str(f) for f in Path(folder).glob('VCS__*')]
@@ -1140,7 +1183,7 @@ def is_testcase_submission_limit(testcase: dict) -> bool:
     )
 
 
-def can_short_circuit(config_obj: str) -> bool:
+def can_short_circuit(config_obj: dict) -> bool:
     """Check if a job can be short-circuited.
 
     Currently, a job can be short-circuited if either:
@@ -1234,9 +1277,13 @@ def history_short_circuit_helper(
     with open(submit_timestamp_path) as fd:
         submit_timestamp = dateutils.read_submitty_date(fd.read().rstrip())
     submit_time = dateutils.write_submitty_date(submit_timestamp)
-    gradeable_deadline_dt = dateutils.read_submitty_date(gradeable_deadline)
 
-    seconds_late = int((submit_timestamp - gradeable_deadline_dt).total_seconds())
+    # compute lateness (if there is a due date / submission deadline)
+    if gradeable_deadline is None:
+        seconds_late = 0
+    else:
+        gradeable_deadline_dt = dateutils.read_submitty_date(gradeable_deadline)
+        seconds_late = int((submit_timestamp - gradeable_deadline_dt).total_seconds())
 
     first_access = ''
     access_duration = -1
@@ -1281,6 +1328,8 @@ def try_short_circuit(config: dict, queue_file: str) -> bool:
     with open(queue_file) as fd:
         queue_obj = json.load(fd)
 
+    gradeable_id = f"{queue_obj['semester']}/{queue_obj['course']}/{queue_obj['gradeable']}"
+
     course_path = os.path.join(
         config.submitty['submitty_data_dir'],
         'courses',
@@ -1299,18 +1348,29 @@ def try_short_circuit(config: dict, queue_file: str) -> bool:
         course_path, 'config', 'form', f'form_{queue_obj["gradeable"]}.json'
     )
 
-    with open(config_path) as fd:
-        config_obj = json.load(fd)
+    # Some of the config files may disappear if we're running this step and the gradeable is
+    # currently in the process of being re-built. In this case, we give up on trying to
+    # short-circuit and let the full autograder handle it. Best-case scenario, the config once
+    # again exists and we can grade it normally. Worst-case scenario, the config is still out of
+    # commission, but the grader is better-equipped to handle this scenario.
+    try:
+        with open(config_path) as fd:
+            config_obj = json.load(fd)
+        with open(gradeable_config_path) as fd:
+            gradeable_config_obj = json.load(fd)
+    except FileNotFoundError as e:
+        config.logger.log_message(
+            f"Error when short-circuiting: could not find configs for {gradeable_id}: {e}. "
+            f"Attempting to grade normally.",
+            jobname=gradeable_id,
+        )
+        return False
 
     if not can_short_circuit(config_obj):
         return False
 
     job_id = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(6))
-    gradeable_id = f"{queue_obj['semester']}/{queue_obj['course']}/{queue_obj['gradeable']}"
     config.logger.log_message(f"Short-circuiting {gradeable_id}", job_id=job_id)
-
-    with open(gradeable_config_path) as fd:
-        gradeable_config_obj = json.load(fd)
 
     # Augment the queue object
     base, path = os.path.split(queue_file)
@@ -1521,12 +1581,12 @@ def cleanup_shippers(config, worker_status_map, autograding_workers):
 
 # ==================================================================================
 # ==================================================================================
-def launch_shippers(config, worker_status_map, autograding_workers):
+def launch_shippers(config, worker_status_map, autograding_workers) -> List[scheduler.Worker]:
     print("LAUNCH SHIPPERS")
     config.logger.log_message("submitty_autograding_shipper.py launched")
 
     # Launch a shipper process for every worker on the primary machine and each worker machine
-    processes = list()
+    shippers = []
     for name, machine in autograding_workers.items():
         # SKIP MACHINES THAT ARE NOT ENABLED OR NOT REACHABLE
         if not machine['enabled']:
@@ -1588,9 +1648,10 @@ def launch_shippers(config, worker_status_map, autograding_workers):
                 args=(config, thread_name, single_machine_data[name], full_address, u)
             )
             p.start()
-            processes.append((thread_name, p))
+            shipper = scheduler.Worker(config, thread_name, machine, p)
+            shippers.append(shipper)
 
-    return processes
+    return shippers
 
 
 def get_job_requirements(job_file):
@@ -1615,63 +1676,17 @@ def worker_job_match(worker, autograding_workers, job_requirements):
 
 def monitoring_loop(
     config: submitty_config.Config,
-    autograding_workers: dict,
-    processes: List[Tuple[str, multiprocessing.Process]]
+    processes: List[scheduler.Worker]
 ):
 
     print("MONITORING LOOP")
+    sched = scheduler.FCFSScheduler(config, processes)
     total_num_workers = len(processes)
 
     # main monitoring loop
     try:
         while True:
-            alive = 0
-            for name, p in processes:
-                if p.is_alive:
-                    alive = alive+1
-                else:
-                    config.logger.log_message(f"ERROR: process {name} is not alive")
-            if alive != total_num_workers:
-                config.logger.log_message(
-                    f"ERROR: #shippers={total_num_workers} != #alive={alive}"
-                )
-
-            # Find which workers are currently idle, as well as any autograding
-            # jobs which need to be scheduled.
-            workers = [name for (name, p) in processes if p.is_alive]
-            idle_workers = list(filter(
-                lambda n: len(os.listdir(worker_folder(n))) == 0,
-                workers
-            ))
-            jobs = filter(
-                os.path.isfile,
-                map(
-                    lambda f: os.path.join(INTERACTIVE_QUEUE, f),
-                    os.listdir(INTERACTIVE_QUEUE)
-                )
-            )
-
-            # Distribute available jobs randomly among workers currently idle.
-            for job in jobs:
-                if len(idle_workers) == 0:
-                    break
-                job_requirements = get_job_requirements(job)
-                # prune the list to the workers that have the necessary capabilities for this job
-                matching_workers = list(filter(
-                    lambda n: worker_job_match(n, autograding_workers, job_requirements),
-                    idle_workers
-                ))
-                if len(matching_workers) == 0:
-                    # skip this job for now if none of the idle workers can handle this job
-                    continue
-                # pick one of the matching workers randomly
-                dest = random.choice(matching_workers)
-                config.logger.log_message(
-                    f"Pushing job {os.path.basename(job)} to {dest}."
-                )
-                shutil.move(job, worker_folder(dest))
-                idle_workers.remove(dest)
-
+            sched.update_and_schedule()
             time.sleep(1)
 
     except KeyboardInterrupt:
@@ -1752,4 +1767,4 @@ if __name__ == "__main__":
     worker_status_map = update_remote_autograding_workers(config, autograding_workers)
     cleanup_shippers(config, worker_status_map, autograding_workers)
     processes = launch_shippers(config, worker_status_map, autograding_workers)
-    monitoring_loop(config, autograding_workers, processes)
+    monitoring_loop(config, processes)

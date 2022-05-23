@@ -46,6 +46,10 @@
             Email:
             <input type="text" name="user_email" id="user_email" placeholder="(Optional)" />
         </label>
+        <label for="user_email_secondary">
+            Secondary Email:
+            <input type="text" name="user_email_secondary" id="user_email_secondary" placeholder="(Optional)" />
+        </label>
         {% if use_database %}
             <label>
                 Password:
@@ -88,6 +92,14 @@
                 <option value="2">Full Access Grader (Grad TA)</option>
                 <option value="3">Limited Access Grader (Mentor)</option>
                 <option value="4">Student</option>
+            </select>
+        </label>
+        <label for="registration_type" class="full-width">
+            Registration Type:
+            <select name="registration_type" id="registration_type">
+                <option value="graded">graded</option>
+                <option value="audit">audit</option>
+                <option value="withdrawn">withdrawn</option>
             </select>
         </label>
         <fieldset id="user-form-assigned-sections" class="full-width" hidden>

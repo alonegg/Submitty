@@ -32,8 +32,18 @@ if [ -d ${THIS_DIR}/../.vagrant ]; then
     VAGRANT=1
 fi
 
+
+#
+# SEE GITHUB ISSUE #7885 - https://github.com/Submitty/Submitty/issues/7885
+UTM_ARM=0
+if [[ "$(uname -m)" = "aarch64" ]] ; then
+    UTM_ARM=1
+fi
+
+
 SUBMITTY_REPOSITORY=$(jq -r '.submitty_repository' ${CONF_DIR}/submitty.json)
 SUBMITTY_INSTALL_DIR=$(jq -r '.submitty_install_dir' ${CONF_DIR}/submitty.json)
+WORKER=$([[ $(jq -r '.worker' ${CONF_DIR}/submitty.json) == "true" ]] && echo 1 || echo 0)
 
 source ${THIS_DIR}/bin/versions.sh
 
@@ -43,6 +53,18 @@ if [ ${WORKER} == 0 ]; then
 else
     ALL_DAEMONS=( submitty_autograding_worker )
     RESTART_DAEMONS=( )
+fi
+
+########################################################################################################################
+########################################################################################################################
+# FORCE CORRECT TIME SKEW
+# This may happen on a development virtual machine
+# SEE GITHUB ISSUE #7885 - https://github.com/Submitty/Submitty/issues/7885
+if [ ${UTM_ARM} == 1 ]; then
+    sudo service ntp stop
+    sudo ntpd -gq
+    sudo service ntp start
+    sudo timedatectl set-timezone America/New_York
 fi
 
 ########################################################################################################################
@@ -58,7 +80,7 @@ if [[ "$#" -ge 1 && "$1" != "test" && "$1" != "clean" && "$1" != "test_rainbow"
        && "$1" != "skip_web_restart" && "$1" != "disable_shipper_worker" ]]; then
     echo -e "Usage:"
     echo -e "   ./INSTALL_SUBMITTY.sh"
-    echo -e "   ./INSTALL_SUBMITTY.sh clean"
+    echo -e "   ./INSTALL_SUBMITTY.sh clean quick"
     echo -e "   ./INSTALL_SUBMITTY.sh clean test"
     echo -e "   ./INSTALL_SUBMITTY.sh clean skip_web_restart"
     echo -e "   ./INSTALL_SUBMITTY.sh clear test  <test_case_1>"
@@ -140,6 +162,7 @@ PHP_USER=$(jq -r '.php_user' ${SUBMITTY_INSTALL_DIR}/config/submitty_users.json)
 CGI_USER=$(jq -r '.cgi_user' ${SUBMITTY_INSTALL_DIR}/config/submitty_users.json)
 DAEMONPHP_GROUP=$(jq -r '.daemonphp_group' ${SUBMITTY_INSTALL_DIR}/config/submitty_users.json)
 DAEMONCGI_GROUP=$(jq -r '.daemoncgi_group' ${SUBMITTY_INSTALL_DIR}/config/submitty_users.json)
+SUPERVISOR_USER=$(jq -r '.supervisor_user' ${SUBMITTY_INSTALL_DIR}/config/submitty_users.json)
 
 ########################################################################################################################
 ########################################################################################################################
@@ -177,12 +200,29 @@ if [[ "$#" -ge 1 && $1 == "clean" ]] ; then
 
     echo -e "\nDeleting submitty installation directories, ${SUBMITTY_INSTALL_DIR}, for a clean installation\n"
 
-    rm -rf ${SUBMITTY_INSTALL_DIR}/site
-    rm -rf ${SUBMITTY_INSTALL_DIR}/src
+    if [[ "$#" -ge 1 && $1 == "quick" ]] ; then
+        # pop this argument from the list of arguments...
+        shift
+
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/app
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/cache
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/cgi-bin
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/config
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/cypress
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/public
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/room_templates
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/socket
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site/tests
+        find ${SUBMITTY_INSTALL_DIR}/site -maxdepth 1 -type f -exec rm {} \;
+    else
+        rm -rf ${SUBMITTY_INSTALL_DIR}/site
+        rm -rf ${SUBMITTY_INSTALL_DIR}/src
+        rm -rf ${SUBMITTY_INSTALL_DIR}/vendor
+        rm -rf ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
+    fi
     rm -rf ${SUBMITTY_INSTALL_DIR}/bin
     rm -rf ${SUBMITTY_INSTALL_DIR}/sbin
     rm -rf ${SUBMITTY_INSTALL_DIR}/test_suite
-    rm -rf ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
 fi
 
 # set the permissions of the top level directory
@@ -223,6 +263,7 @@ if [ "${WORKER}" == 0 ]; then
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/bulk_uploads
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/emails
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/site_errors
+    mkdir -p ${SUBMITTY_DATA_DIR}/logs/socket_errors
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/ta_grading
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/course_creation
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/vcs_generation
@@ -230,6 +271,8 @@ if [ "${WORKER}" == 0 ]; then
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/psql
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/preferred_names
     mkdir -p ${SUBMITTY_DATA_DIR}/logs/office_hours_queue
+    mkdir -p ${SUBMITTY_DATA_DIR}/logs/docker
+    mkdir -p ${SUBMITTY_DATA_DIR}/logs/daemon_job_queue
 fi
 # ------------------------------------------------------------------------
 
@@ -263,15 +306,20 @@ if [ "${WORKER}" == 0 ]; then
     chown  -R ${DAEMON_USER}:${COURSE_BUILDERS_GROUP} ${SUBMITTY_DATA_DIR}/logs/course_creation
     chown  -R ${DAEMON_USER}:${COURSE_BUILDERS_GROUP} ${SUBMITTY_DATA_DIR}/logs/rainbow_grades
     chown  -R ${PHP_USER}:${COURSE_BUILDERS_GROUP}    ${SUBMITTY_DATA_DIR}/logs/site_errors
+    chown  -R ${PHP_USER}:${COURSE_BUILDERS_GROUP}    ${SUBMITTY_DATA_DIR}/logs/socket_errors
     chown  -R ${PHP_USER}:${COURSE_BUILDERS_GROUP}    ${SUBMITTY_DATA_DIR}/logs/ta_grading
     chown  -R ${DAEMON_USER}:${COURSE_BUILDERS_GROUP} ${SUBMITTY_DATA_DIR}/logs/vcs_generation
     chown  -R postgres:${DAEMON_GROUP}                ${SUBMITTY_DATA_DIR}/logs/psql
+
     # Folder g+w permission needed to permit DAEMON_GROUP to remove expired Postgresql logs.
     chmod  g+w                                        ${SUBMITTY_DATA_DIR}/logs/psql
     chown  -R ${DAEMON_USER}:${DAEMON_GROUP}          ${SUBMITTY_DATA_DIR}/logs/preferred_names
     chown  -R ${PHP_USER}:${COURSE_BUILDERS_GROUP}    ${SUBMITTY_DATA_DIR}/logs/office_hours_queue
+    chown  -R ${DAEMON_USER}:${DAEMONPHP_GROUP}       ${SUBMITTY_DATA_DIR}/logs/docker
+    chown  -R ${DAEMON_USER}:${DAEMONPHP_GROUP}       ${SUBMITTY_DATA_DIR}/logs/daemon_job_queue
 
-    # php needs to be able to read containers config
+    # php & daemon needs to be able to read workers & containers config
+    chown ${PHP_USER}:${DAEMONPHP_GROUP} ${SUBMITTY_INSTALL_DIR}/config/autograding_workers.json
     chown ${PHP_USER}:${DAEMONPHP_GROUP} ${SUBMITTY_INSTALL_DIR}/config/autograding_containers.json
 fi
 
@@ -323,6 +371,32 @@ chmod 511 ${SUBMITTY_DATA_DIR}/tmp
 #  (--delete, but probably dont want)
 #  / trailing slash, copies contents into target
 #  no slash, copies the directory & contents to target
+
+########################################################################################################################
+########################################################################################################################
+# CHECKOUT & INSTALL THE NLOHMANN C++ JSON LIBRARY
+
+nlohmann_dir=${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor/nlohmann/json
+
+# If we don't already have a copy of this repository, check it out
+if [ ! -d "${nlohmann_dir}" ]; then
+    git clone --depth 1 https://github.com/nlohmann/json.git ${nlohmann_dir}
+fi
+
+# TODO: We aren't checking / enforcing a specific/minimum version of this library...
+
+# Add read & traverse permissions for RainbowGrades and vendor repos
+find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor -type d -exec chmod o+rx {} \;
+find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor -type f -exec chmod o+r {} \;
+
+# "install" the nlohmann json library
+mkdir -p ${SUBMITTY_INSTALL_DIR}/vendor
+sudo chown -R root:submitty_course_builders ${SUBMITTY_INSTALL_DIR}/vendor
+sudo chown -R root:submitty_course_builders ${SUBMITTY_INSTALL_DIR}/vendor
+rsync -rtz ${SUBMITTY_REPOSITORY}/../vendor/nlohmann/json/include ${SUBMITTY_INSTALL_DIR}/vendor/
+chown -R  root:root ${SUBMITTY_INSTALL_DIR}/vendor
+find ${SUBMITTY_INSTALL_DIR}/vendor -type d -exec chmod 555 {} \;
+find ${SUBMITTY_INSTALL_DIR}/vendor -type f -exec chmod 444 {} \;
 
 
 ########################################################################################################################
@@ -417,7 +491,7 @@ fi
 ########################################################################################################################
 # COPY VARIOUS SCRIPTS USED BY INSTRUCTORS AND SYS ADMINS FOR COURSE ADMINISTRATION
 
-source ${SUBMITTY_REPOSITORY}/.setup/INSTALL_SUBMITTY_HELPER_BIN.sh
+bash ${SUBMITTY_REPOSITORY}/.setup/install_submitty/install_bin.sh
 
 # build the helper program for strace output and restrictions by system call categories
 g++ ${SUBMITTY_INSTALL_DIR}/src/grading/system_call_check.cpp -o ${SUBMITTY_INSTALL_DIR}/bin/system_call_check.out
@@ -425,12 +499,37 @@ g++ ${SUBMITTY_INSTALL_DIR}/src/grading/system_call_check.cpp -o ${SUBMITTY_INST
 # build the helper program for calculating early submission incentive extensions
 g++ ${SUBMITTY_INSTALL_DIR}/bin/calculate_extensions.cpp -lboost_system -lboost_filesystem -std=c++11 -Wall -g -o ${SUBMITTY_INSTALL_DIR}/bin/calculate_extensions.out
 
+GRADINGCODE="${SUBMITTY_INSTALL_DIR}/src/grading"
+JSONCODE="${SUBMITTY_INSTALL_DIR}/vendor/include"
+
+# Create the complete/build config using main_configure
+g++ "${GRADINGCODE}/main_configure.cpp" \
+    "${GRADINGCODE}/load_config_json.cpp" \
+    "${GRADINGCODE}/execute.cpp" \
+    "${GRADINGCODE}/TestCase.cpp" \
+    "${GRADINGCODE}/error_message.cpp" \
+    "${GRADINGCODE}/window_utils.cpp" \
+    "${GRADINGCODE}/dispatch.cpp" \
+    "${GRADINGCODE}/change.cpp" \
+    "${GRADINGCODE}/difference.cpp" \
+    "${GRADINGCODE}/tokenSearch.cpp" \
+    "${GRADINGCODE}/tokens.cpp" \
+    "${GRADINGCODE}/clean.cpp" \
+    "${GRADINGCODE}/execute_limits.cpp" \
+    "${GRADINGCODE}/seccomp_functions.cpp" \
+    "${GRADINGCODE}/empty_custom_function.cpp" \
+    "-I${JSONCODE}" \
+    -pthread -std=c++11 -lseccomp -o "${SUBMITTY_INSTALL_DIR}/bin/configure.out"
+
 # set the permissions
 chown root:${COURSE_BUILDERS_GROUP} ${SUBMITTY_INSTALL_DIR}/bin/system_call_check.out
 chmod 550 ${SUBMITTY_INSTALL_DIR}/bin/system_call_check.out
 
 chown root:${COURSE_BUILDERS_GROUP} ${SUBMITTY_INSTALL_DIR}/bin/calculate_extensions.out
 chmod 550 ${SUBMITTY_INSTALL_DIR}/bin/calculate_extensions.out
+
+chown ${DAEMON_USER}:${COURSE_BUILDERS_GROUP} "${SUBMITTY_INSTALL_DIR}/bin/configure.out"
+chmod 550 ${SUBMITTY_INSTALL_DIR}/bin/configure.out
 
 
 ###############################################
@@ -478,7 +577,7 @@ popd > /dev/null
 ################################################################################################################
 # COPY THE 1.0 Grading Website if not in worker mode
 if [ ${WORKER} == 0 ]; then
-    source ${SUBMITTY_REPOSITORY}/.setup/INSTALL_SUBMITTY_HELPER_SITE.sh
+    bash ${SUBMITTY_REPOSITORY}/.setup/install_submitty/install_site.sh
 fi
 
 ################################################################################################################
@@ -489,6 +588,11 @@ echo -e "Compile and install analysis tools"
 
 mkdir -p ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
 
+# SEE GITHUB ISSUE #7885 - https://github.com/Submitty/Submitty/issues/7885
+# HASKELL BINARY IS NOT AVAILABLE ARM64
+if [ ${UTM_ARM} == 0 ]; then
+# END ARM64
+
 pushd ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
 if [[ ! -f VERSION || $(< VERSION) != "${AnalysisTools_Version}" ]]; then
     for b in count plagiarism diagnostics;
@@ -498,6 +602,13 @@ if [[ ! -f VERSION || $(< VERSION) != "${AnalysisTools_Version}" ]]; then
     echo ${AnalysisTools_Version} > VERSION
 fi
 popd > /dev/null
+
+# SEE GITHUB ISSUE #7885 - https://github.com/Submitty/Submitty/issues/7885
+# HASKELL BINARY IS NOT AVAILABLE ARM64
+else
+    echo "SKIPPING ANALYSIS TOOLS INSTALL ON UTM ARM 64"
+fi
+# END ARM64
 
 # change permissions
 chown -R ${DAEMON_USER}:${COURSE_BUILDERS_GROUP} ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
@@ -560,22 +671,10 @@ chmod -R 555 ${SUBMITTY_INSTALL_DIR}/SubmittyAnalysisTools
 
 
 #####################################
-# Checkout the NLohmann C++ json library
-
-nlohmann_dir=${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor/nlohmann/json
-
-if [ ! -d "${nlohmann_dir}" ]; then
-    git clone --depth 1 https://github.com/nlohmann/json.git ${nlohmann_dir}
-fi
-
-#####################################
 # Add read & traverse permissions for RainbowGrades and vendor repos
 
 find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/RainbowGrades -type d -exec chmod o+rx {} \;
 find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/RainbowGrades -type f -exec chmod o+r {} \;
-
-find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor -type d -exec chmod o+rx {} \;
-find ${SUBMITTY_INSTALL_DIR}/GIT_CHECKOUT/vendor -type f -exec chmod o+r {} \;
 
 #####################################
 # Obtain API auth token for submitty-admin user

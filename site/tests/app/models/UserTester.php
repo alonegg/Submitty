@@ -23,6 +23,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_lastname' => "Tester",
             'user_preferred_lastname' => null,
             'user_email' => "test@example.com",
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'user_group' => User::GROUP_INSTRUCTOR,
             'registration_section' => 1,
             'rotating_section' => null,
@@ -44,6 +46,7 @@ class UserTester extends \PHPUnit\Framework\TestCase {
         $this->assertEquals($details['rotating_section'], $user->getRotatingSection());
         $this->assertEquals($details['manual_registration'], $user->isManualRegistration());
         $this->assertEquals([1,2], $user->getGradingRegistrationSections());
+        $this->assertEquals('staff', $user->getRegistrationType());
         $this->assertTrue($user->accessAdmin());
         $this->assertTrue($user->accessFullGrading());
         $this->assertTrue($user->accessGrading());
@@ -60,11 +63,14 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_lastname' => "Tester",
             'user_preferred_lastname' => "Bunyan",
             'user_email' => "test@example.com",
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'user_group' => User::GROUP_INSTRUCTOR,
             'registration_section' => 1,
             'rotating_section' => null,
             'manual_registration' => false,
-            'grading_registration_sections' => [1,2]
+            'grading_registration_sections' => [1,2],
+            'registration_type' => 'audit',
         ];
         $user = new User($this->core, $details);
         $this->assertEquals($details['user_id'], $user->getId());
@@ -76,6 +82,7 @@ class UserTester extends \PHPUnit\Framework\TestCase {
         $this->assertEquals($details['user_lastname'], $user->getLegalLastName());
         $this->assertEquals($details['user_preferred_lastname'], $user->getPreferredLastName());
         $this->assertEquals($details['user_preferred_lastname'], $user->getDisplayedLastName());
+        $this->assertEquals($details['registration_type'], $user->getRegistrationType());
     }
 
     public function testPassword() {
@@ -88,6 +95,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_lastname' => "Tester",
             'user_preferred_lastname' => null,
             'user_email' => "test@example.com",
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'user_group' => User::GROUP_INSTRUCTOR,
             'registration_section' => 1,
             'rotating_section' => null,
@@ -113,6 +122,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_lastname' => "Tester",
             'user_preferred_lastname' => null,
             'user_email' => "test@example.com",
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'user_group' => User::GROUP_INSTRUCTOR,
             'user_access_level' => User::LEVEL_FACULTY,
             'registration_section' => 1,
@@ -129,6 +140,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'displayed_first_name' => 'User',
             'displayed_last_name' => 'Tester',
             'email' => 'test@example.com',
+            'secondary_email' => "test@exampletwo.com",
+            'email_both' => false,
             'legal_first_name' => 'User',
             'grading_registration_sections' => [1,2],
             'group' => User::GROUP_INSTRUCTOR,
@@ -141,6 +154,7 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'preferred_last_name' => "",
             'numeric_id' => '123456789',
             'registration_section' => 1,
+            'registration_type' => 'staff',
             'rotating_section' => null,
             'modified' => true,
             'anon_id' => "TestAnonymous",
@@ -184,6 +198,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_firstname' => 'test',
             'user_lastname' => 'test',
             'user_email' => 'user@email.com',
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'time_zone' => 'NOT_SET/NOT_SET'
         ]);
         $this->assertEquals('NOT SET', $user->getNiceFormatTimeZone());
@@ -195,6 +211,8 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             'user_firstname' => 'test',
             'user_lastname' => 'test',
             'user_email' => 'user@email.com',
+            'user_email_secondary' => "test@exampletwo.com",
+            'user_email_secondary_notify' => false,
             'time_zone' => 'NOT_SET/NOT_SET'
         ]);
         $this->assertEquals('NOT SET', $user->getUTCOffset());
@@ -214,6 +232,14 @@ class UserTester extends \PHPUnit\Framework\TestCase {
             ['user_email', 'invalid', false],
             ['user_email', '@example.com', false],
             ['user_email', 'Abc..123@example.com', false],
+            ['user_email_secondary', '', true],
+            ['user_email_secondary', 'pevelm@rpi.edu', true],
+            ['user_email_secondary', 'student@faculty.university-of-xy.edu', true],
+            ['user_email_secondary', '_______@example.com', true],
+            ['user_email_secondary', 'firstname-lastname@example.com', true],
+            ['user_email_secondary', 'invalid', false],
+            ['user_email_secondary', '@example.com', false],
+            ['user_email_secondary', 'Abc..123@example.com', false],
             ['user_group', '0', false],
             ['user_group', '1', true],
             ['user_group', '2', true],
